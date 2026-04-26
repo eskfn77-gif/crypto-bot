@@ -1,3 +1,4 @@
+print("BOT FILE STARTED", flush=True)
 import os
 import json
 import threading
