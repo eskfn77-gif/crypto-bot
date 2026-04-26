@@ -1,5 +1,7 @@
 import os
 import json
+import threading
+from flask import Flask
 import requests
 import discord
 from discord.ext import tasks
@@ -16,25 +18,45 @@ CHAIN_ID = os.getenv("CHAIN_ID", "1")
 CHECK_SECONDS = 60
 STATE_FILE = "last_tx.json"
 
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Crypto Discord bot is running."
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
+def run_web_server():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web_server, daemon=True).start()
+
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
 
 def load_last_tx_hash():
-    if not os.path.exists(STATE_FILE):
-        return None
-
     try:
+        if not os.path.exists(STATE_FILE):
+            return None
+
         with open(STATE_FILE, "r") as file:
             data = json.load(file)
             return data.get("last_tx_hash")
-    except:
+    except Exception as error:
+        print(f"Could not load last tx: {error}")
         return None
 
 
 def save_last_tx_hash(tx_hash):
-    with open(STATE_FILE, "w") as file:
-        json.dump({"last_tx_hash": tx_hash}, file)
+    try:
+        with open(STATE_FILE, "w") as file:
+            json.dump({"last_tx_hash": tx_hash}, file)
+    except Exception as error:
+        print(f"Could not save last tx: {error}")
 
 
 def etherscan_request(params):
@@ -59,6 +81,7 @@ def get_recent_transactions():
     })
 
     if data.get("status") != "1":
+        print(f"Etherscan tx issue: {data}")
         return []
 
     return data.get("result", [])
@@ -73,6 +96,7 @@ def get_wallet_balance():
     })
 
     if data.get("status") != "1":
+        print(f"Etherscan balance issue: {data}")
         return None
 
     return int(data["result"]) / 10**18
@@ -91,24 +115,22 @@ def get_eth_price():
     data = requests.get(url, params=params, timeout=20).json()
 
     if data.get("status") != "1":
+        print(f"Etherscan price issue: {data}")
         return None
 
     return float(data["result"]["ethusd"])
 
 
 def tx_link(tx_hash):
-    if CHAIN_ID == "1":
-        return f"https://etherscan.io/tx/{tx_hash}"
-    if CHAIN_ID == "56":
-        return f"https://bscscan.com/tx/{tx_hash}"
-    if CHAIN_ID == "137":
-        return f"https://polygonscan.com/tx/{tx_hash}"
-    if CHAIN_ID == "8453":
-        return f"https://basescan.org/tx/{tx_hash}"
-    if CHAIN_ID == "42161":
-        return f"https://arbiscan.io/tx/{tx_hash}"
+    links = {
+        "1": "https://etherscan.io/tx/",
+        "56": "https://bscscan.com/tx/",
+        "137": "https://polygonscan.com/tx/",
+        "8453": "https://basescan.org/tx/",
+        "42161": "https://arbiscan.io/tx/"
+    }
 
-    return f"https://etherscan.io/tx/{tx_hash}"
+    return links.get(CHAIN_ID, "https://etherscan.io/tx/") + tx_hash
 
 
 async def send_transaction_alert(tx):
@@ -160,7 +182,7 @@ async def check_wallet():
     transactions = get_recent_transactions()
 
     if not transactions:
-        print("No transactions found or API issue.")
+        print("No transactions found.")
         return
 
     newest_hash = transactions[0]["hash"]
